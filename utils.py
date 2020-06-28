@@ -1,6 +1,7 @@
 import requests
 import os
 import pandas as pd
+import numpy as np
 import math
 import yaml
 
@@ -14,14 +15,19 @@ class DataConfig(object):
     def load(self, file_path):
         pass
 
-
-
 class Encoder(object):
-    def __init__(self,max_year, min_year, location_map_dir):
+    def __init__(self,
+                max_year, 
+                min_year, 
+                location_map_dir,
+                ccnt_threshold,
+                cnt_threshold,
+                ):
         self.max_year = max_year
         self.min_year = min_year
         self.location_map_dir = location_map_dir
-        pass
+        self.ccnt_threshold = ccnt_threshold
+        self.cnt_threshold = cnt_threshold
     
     @classmethod
     def from_yaml(cls, yaml_file_path):
@@ -31,13 +37,20 @@ class Encoder(object):
     
     @classmethod
     def from_raw_data(cls, data_path):
-        df = df.read_csv(data_path)
+        df = pd.read_csv(data_path)
         max_year = max(df["REG_YYMM"] // 100)
         min_year = min(df["REG_YYMM"] // 100)
         location_map_dir = os.path.join(
-                    os.path.dirname(data_path,
-                    "data/location_map.yaml"))
-        return cls(max_year, min_year, location_map_dir)
+                    os.path.dirname(data_path),
+                    "location_map.yaml")
+        ccnt_threshold = np.percentile(df["CSTMR_CNT"], 99)
+        cnt_threshold = np.percentile(df["CNT"], 99)
+        return cls(
+                max_year, 
+                min_year,
+                location_map_dir,
+                ccnt_threshold,
+                cnt_threshold,)
 
     def encode_yd(self, yd: int):
         year  = yd // 100
@@ -49,12 +62,13 @@ class Encoder(object):
     def encode_loc(self, 
                 location, 
                 location_map_dir = None):
+        # EDA 과정에서 CCG_NM에 많은 null이 포함되어 있음을 확인
+        # TODO: 그냥 null 이면 empty string으로 변환되어 이 method로 들어오도록 처리
         if location_map_dir == None:
             self.location_map = {}
         else:
             self.location_map = self.load_location_map(
                 location_map_dir)
-        
         try:
             loc = self.location_map[location]
         except KeyError:
@@ -72,13 +86,53 @@ class Encoder(object):
             return yaml.load(f.read())
 
     def save_location_map(self,
-                    location_map,
                     location_map_dir):
         with open(location_map_dir, "w", encoding = 'utf-8') as f:
-            f.write(yaml.dump(location_map))
+            f.write(yaml.dump(self.location_map))
 
+    def encode_age(self, age):
+        """
+        나이의 경우 10s, 20s 이렇게 str 형태로 표시되어있음
+        10s --> 0.1 로 변환
+        """
+        return int(age[:-1]) / 100 
+    
+    def encode_sex(self, sex):
+        """
+        1, 2 로 표시되어 있음 자료형은 numpy.int64
+        """
+        return sex - 1
 
+    def encode_family_lifecycle(self, flc):
+        """
+        type(flc): numpy.int64
+        1: 1인가구
+        2: 영유아자녀가구
+        3: 중고생자녀가구 
+        4: 성인자녀가구
+        5: 노년가구
+        """
+        one_hot_vector = np.array([0 for i in range(5)])
+        one_hot_vector[flc-1] = 1
+        return one_hot_vector
 
+    def encode_ccnt(self, ccnt):
+        # minmaxscaling vs standard scaling
+        # from EDA, ccnt looks like half-normal distribution
+        # but it does not really follow normal distribution
+        # decided to use minmax scaling 
+        # but use threshold instead of max
+        if ccnt <= self.ccnt_threshold:
+            return ccnt / self.ccnt_threshold
+        return "outlier"
+    
+    def encode_cnt(self, cnt):
+        if cnt <= self.cnt_threshold:
+            return cnt / self.cnt_threshold
+        return "outlier"
+
+    def encode_amt(self, amt):
+        raise NotImplementedError
 
 
 
